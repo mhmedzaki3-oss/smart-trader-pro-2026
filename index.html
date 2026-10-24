@@ -58,8 +58,50 @@ window.addEventListener('popstate',e=>{if(e.state&&e.state.stTab)switchTab(e.sta
 
 function applyTheme(theme){const t=theme==='dark'?'dark':'light';el('htmlTag').dataset.theme=t;el('themeBtn').textContent=t==='dark'?'☀️':'🌙';el('themeBtn').title=t==='dark'?'التبديل إلى الوضع الفاتح':'التبديل إلى الوضع الداكن';try{localStorage.setItem('st_theme',t)}catch(_){}if(myChart&&myChart.options&&myChart.options.scales){const fg=t==='dark'?'#e8eef8':'#64748b',grid=t==='dark'?'#263750':'#e2e8f0';for(const axis of Object.values(myChart.options.scales)){if(axis.ticks)axis.ticks.color=fg;if(axis.grid)axis.grid.color=grid}myChart.update('none')}}
 function toggleTheme(){applyTheme(el('htmlTag').dataset.theme==='dark'?'light':'dark')}
-function validBars(data){if(!data||data.ok!==true||!Array.isArray(data.bars))return[];return data.bars.filter(b=>b&&Number.isFinite(Number(b.close))&&Number(b.close)>0&&b.date&&Number.isFinite(new Date(b.date).getTime())).map(b=>({...b,close:Number(b.close),high:Number.isFinite(Number(b.high))?Number(b.high):null,low:Number.isFinite(Number(b.low))?Number(b.low):null,volume:Number.isFinite(Number(b.volume))&&Number(b.volume)>=0?Number(b.volume):null})).sort((a,b)=>new Date(a.date)-new Date(b.date));}
-async function fetchOne(s){try{const res=await fetch(`${API}/api/prices?symbol=${encodeURIComponent(s.ticker)}.CA&range=1mo`,{headers:{Accept:'application/json'},cache:'no-store'});if(!res.ok)throw Error('HTTP '+res.status);return{stock:s,data:await res.json()}}catch(_){return{stock:s,data:null}}}
+function validBars(data) {
+  if (!data || typeof data !== 'object') return [];
+
+  const source = Array.isArray(data.bars)
+    ? data.bars
+    : Array.isArray(data.prices)
+      ? data.prices
+      : [];
+
+  return source
+    .map(b => {
+      if (!b) return null;
+
+      const close = Number(b.close);
+      const rawTime = b.date ?? b.time;
+
+      const date = typeof rawTime === 'number'
+        ? new Date(rawTime < 1e12 ? rawTime * 1000 : rawTime)
+        : new Date(rawTime);
+
+      if (
+        !Number.isFinite(close) ||
+        close <= 0 ||
+        !Number.isFinite(date.getTime())
+      ) return null;
+
+      const high = Number(b.high);
+      const low = Number(b.low);
+      const volume = Number(b.volume);
+
+      return {
+        ...b,
+        date: date.toISOString(),
+        close,
+        high: Number.isFinite(high) && high > 0 ? high : null,
+        low: Number.isFinite(low) && low > 0 ? low : null,
+        volume: Number.isFinite(volume) && volume >= 0
+          ? volume
+          : null
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+}
 
 function updateMarketPulse(results){
  const moves=[];const tickerItems=[];
@@ -85,7 +127,7 @@ async function enablePriceNotifications(){
 }
 
 async function fetchPrices(){if(loadingPrices)return;loadingPrices=true;el('fetchBtn').disabled=true;el('loader').classList.remove('hidden');setStatus('marketStatus','جاري تحديث الأسعار...');try{const results=await Promise.all(stocks.map(fetchOne));updateMarketPulse(results);let success=0;el('marketList').replaceChildren();results.forEach(r=>{const bars=validBars(r.data),row=document.createElement('div');row.className='stock-item';const info=document.createElement('div');info.className='stock-info';const title=document.createElement('h4');title.textContent=stockName(r.stock);const ticker=document.createElement('p');ticker.textContent=r.stock.ticker+'.CA';info.append(title,ticker);const price=document.createElement('div');if(bars.length){const value=bars[bars.length-1].close;currentPrices[r.stock.ticker]=value;success++;price.className='stock-price';price.textContent=money(value)}else{price.className='stock-price error';price.textContent='غير متاح'}row.append(info,price);el('marketList').append(row)});if(success===stocks.length)setStatus('marketStatus',`تم تحديث بيانات ${success} سهمًا بنجاح.`,'success');else if(success)setStatus('marketStatus',`توفرت بيانات ${success} من ${stocks.length} سهمًا فقط؛ قد تكون بعض الأسعار غير متاحة.`,'error');else setStatus('marketStatus','تعذر جلب الأسعار. تحقق من الاتصال أو مصدر البيانات ثم حاول مجددًا.','error');renderPortfolio()}catch(err){setStatus('marketStatus','تعذر تحديث الأسعار بسبب خطأ غير متوقع. تحقق من الاتصال ثم حاول مجددًا.','error')}finally{loadingPrices=false;el('fetchBtn').disabled=false;el('loader').classList.add('hidden')}}
-async function loadChart(){if(loadingChart)return;const ticker=el('chartStockSelect').value||'COMI',range=el('chartRangeSelect').value;loadingChart=true;el('loadChartBtn').disabled=true;setStatus('chartStatus','جاري تحميل الرسم...');try{const res=await fetch(`${API}/api/public/yahoo?symbol=${encodeURIComponent(ticker)}.CA&range=${encodeURIComponent(range)}`,{headers:{Accept:'application/json'},cache:'no-store'});if(!res.ok)throw Error('HTTP '+res.status);const data=await res.json(),bars=validBars(data);if(!bars.length)throw Error('No chart data');if(typeof Chart==='undefined')throw Error('Chart.js unavailable');const canvas=el('stockChart');if(myChart){myChart.destroy();myChart=null}myChart=new Chart(canvas,{type:'line',data:{labels:bars.map(b=>new Date(b.date).toLocaleDateString(lang==='ar'?'ar-EG':'en-GB',{month:'short',day:'numeric'})),datasets:[{label:ticker,data:bars.map(b=>Number(b.close)),borderColor:'#2563eb',backgroundColor:'rgba(37,99,235,.1)',fill:true,borderWidth:2.5,pointRadius:0,tension:.25}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:6},grid:{display:false}},y:{grid:{color:'#e2e8f0'}}}}});setStatus('chartStatus',`تم تحميل ${bars.length} نقطة سعرية للسهم ${ticker}.`,'success')}catch(_){if(myChart){myChart.destroy();myChart=null}setStatus('chartStatus','تعذر تحميل الرسم أو مكتبة الرسوم. تحقق من الإنترنت وتوافر بيانات السهم.','error')}finally{loadingChart=false;el('loadChartBtn').disabled=false}}
+async function loadChart(){if(loadingChart)return;const ticker=el('chartStockSelect').value||'COMI',range=el('chartRangeSelect').value;loadingChart=true;el('loadChartBtn').disabled=true;setStatus('chartStatus','جاري تحميل الرسم...');try{const res=await fetch(`${API}/api/prices?symbol=${encodeURIComponent(ticker)}.CA&range=${encodeURIComponent(range)}`,{headers:{Accept:'application/json'},cache:'no-store'});if(!res.ok)throw Error('HTTP '+res.status);const data=await res.json(),bars=validBars(data);if(!bars.length)throw Error('No chart data');if(typeof Chart==='undefined')throw Error('Chart.js unavailable');const canvas=el('stockChart');if(myChart){myChart.destroy();myChart=null}myChart=new Chart(canvas,{type:'line',data:{labels:bars.map(b=>new Date(b.date).toLocaleDateString(lang==='ar'?'ar-EG':'en-GB',{month:'short',day:'numeric'})),datasets:[{label:ticker,data:bars.map(b=>Number(b.close)),borderColor:'#2563eb',backgroundColor:'rgba(37,99,235,.1)',fill:true,borderWidth:2.5,pointRadius:0,tension:.25}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:6},grid:{display:false}},y:{grid:{color:'#e2e8f0'}}}}});setStatus('chartStatus',`تم تحميل ${bars.length} نقطة سعرية للسهم ${ticker}.`,'success')}catch(_){if(myChart){myChart.destroy();myChart=null}setStatus('chartStatus','تعذر تحميل الرسم أو مكتبة الرسوم. تحقق من الإنترنت وتوافر بيانات السهم.','error')}finally{loadingChart=false;el('loadChartBtn').disabled=false}}
 function renderPortfolio(){
  let totalCost=0,totalMarket=0,totalPnl=0,totalQty=0;el('portfolioList').replaceChildren();
  portfolio.forEach((p,index)=>{const stock=stocks.find(s=>s.ticker===p.ticker);if(!stock)return;const live=Number(currentPrices[p.ticker]);const hasLive=Number.isFinite(live)&&live>0;const price=hasLive?live:(Number(p.current)>0?Number(p.current):p.buy);const value=p.qty*price,cost=p.qty*p.buy,pnl=value-cost,pct=cost?pnl/cost*100:0;totalCost+=cost;totalMarket+=value;totalPnl+=pnl;totalQty+=p.qty;
@@ -116,7 +158,15 @@ async function analyzeSelectedStock(){
  const ticker=el('chartStockSelect').value||'COMI',out=el('finalRecommendation'),marketOut=el('aiResult');
  out.textContent='جاري تحليل البيانات واسترجاع المعرفة ذات الصلة...';if(marketOut){marketOut.classList.remove('hidden');marketOut.textContent='جاري التحقق من البيانات...'}
  try{
-  const res=await fetch(`${API}/api/public/yahoo?symbol=${encodeURIComponent(ticker)}.CA&range=6mo`,{headers:{Accept:'application/json'},cache:'no-store'});if(!res.ok)throw Error('مصدر الأسعار غير متاح');
+  const res=await fetch(`${API}/a
+162
+163
+164
+165
+166
+167
+168
+pi/public/yahoo?symbol=${encodeURIComponent(ticker)}.CA&range=6mo`,{headers:{Accept:'application/json'},cache:'no-store'});if(!res.ok)throw Error('مصدر الأسعار غير متاح');
   const bars=validBars(await res.json()),prices=bars.map(b=>b.close);if(prices.length<50)throw Error('بيانات تاريخية غير كافية');
   const last=prices.at(-1),ma20=sma(prices,20),ma50=sma(prices,50),delta=ma50>0?(ma20-ma50)/ma50*100:0,rsi=calculateRSI(prices,14);
   const recentBars=bars.slice(-20),recentCloses=prices.slice(-20),lows=recentBars.map(b=>b.low).filter(v=>Number.isFinite(v)&&v>0),highs=recentBars.map(b=>b.high).filter(v=>Number.isFinite(v)&&v>0);
